@@ -67,3 +67,127 @@ results = model.predict(
 output_path = f'/content/runs/detect/predict-2/{uploaded_image_name}'
 cv2_imshow(cv2.imread(output_path))
 
+#!pip install easyocr
+
+import easyocr
+import cv2
+import numpy as np
+
+# Loop through each detected plate
+for result in results:
+    boxes = result.boxes
+    img = cv2.imread(uploaded_image_name)
+
+    for box in boxes:
+        # Get bounding box coordinates
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+        # Crop just the license plate region
+        cropped_plate = img[y1:y2, x1:x2]
+
+        # Run OCR on the cropped plate
+        ocr_results = reader.readtext(cropped_plate)
+
+        # Print detected text
+        for (bbox, text, confidence) in ocr_results:
+            print(f"Plate Text: {text}  |  Confidence: {confidence:.2f}")
+
+        # Optionally display the cropped plate
+        cv2_imshow(cropped_plate)
+
+
+#-----------Preprocessing part-------------------------------
+
+#UPSCALE Image
+
+cropped_plate = cv2.resize(
+    cropped_plate,
+    None,
+    fx=3,
+    fy=3,
+    interpolation=cv2.INTER_CUBIC
+)
+
+cv2_imshow(cropped_plate)
+
+#Convert to Grayscale
+gray = cv2.cvtColor(cropped_plate, cv2.COLOR_BGR2GRAY)
+
+cv2_imshow(gray)
+
+
+#denoise this
+gray = cv2.GaussianBlur(gray, (3,3), 0)
+
+
+#Threshold
+thresh = cv2.threshold(
+    gray,
+    120,
+    255,
+    cv2.THRESH_BINARY_INV
+)
+cv2_imshow(thresh[1])
+
+
+#Shapen this image
+
+kernel = np.array([
+    [-1,-1,-1],
+    [-1, 9,-1],
+    [-1,-1,-1]
+])
+
+sharp = cv2.filter2D(thresh[1], -1, kernel)
+
+
+#Save the temp file
+
+cv2.imwrite("plate.jpg", sharp)
+
+cv2_imshow(sharp)
+
+#easy ocr reader
+
+reader = easyocr.Reader(["ne"])
+
+
+allowlist = '०१२३४५६७८९बामेकोसजनागलुधराभेकसेमपप्रखफझबघञया'
+
+result = reader.readtext(
+    "plate.jpg",
+    detail=0,
+    paragraph=False,
+    allowlist=allowlist
+)
+
+full_text = "".join(result)
+
+valid_chars  = "बामेकोसजनागलुधराभेकसेमपप्रखफझबघञया"
+valid_digits = "०१२३४५६७८९"
+
+letters = []
+numbers = []
+
+for ch in full_text:
+    if ch in valid_chars:
+        letters.append(ch)
+    elif ch in valid_digits:
+        numbers.append(ch)
+
+
+#Plate ko Format is like this:
+# [CHAR][2-DIGIT ZONE][CHAR][SPACE][4-DIGIT NUMBER]       !!!No spacing between characters!!!
+
+first_char = letters[0]  if len(letters) > 0 else ""
+middle_num = "".join(numbers[:2]) if len(numbers) >= 2 else "".join(numbers)
+last_char  = letters[-1] if len(letters) > 1 else ""
+last_4     = "".join(numbers[-4:]) if len(numbers) >= 4 else "".join(numbers[2:])
+
+formatted_plate = first_char + middle_num + last_char + " " + last_4
+
+
+#Final output
+
+print("Detected Plate:")
+formatted_plate
