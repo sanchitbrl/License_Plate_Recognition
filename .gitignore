@@ -1,0 +1,6 @@
+*.pt
+*.pth
+.DS_Store
+__pycache__/
+*.pyc
+_plate_temp.jpg
