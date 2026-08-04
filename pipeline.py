@@ -1,7 +1,4 @@
 """
-Core LPR pipeline logic — no Streamlit dependency, so it can be reused by the
-app, the data-collection script, and any batch/evaluation scripts.
-
 Pipeline:
     1) Plate detection (YOLOv8)         -> crop the plate out of the full image
     2) Plate crop enhancement            -> padding, upscale, CLAHE, sharpen
@@ -24,10 +21,6 @@ NORM_STD = [0.229, 0.224, 0.225]
 DEVANAGARI_DIGITS = set("०१२३४५६७८९")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-# --------------------------------------------------------------------------
-# Model definition — must match the training script exactly
-# --------------------------------------------------------------------------
 class CharCNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
@@ -57,9 +50,8 @@ class CharCNN(nn.Module):
         return x
 
 
-# --------------------------------------------------------------------------
-# Model loaders (plain — no caching; wrap with st.cache_resource in the app)
-# --------------------------------------------------------------------------
+# Model loaders 
+
 def load_plate_model(path):
     return YOLO(path)
 
@@ -86,15 +78,12 @@ def load_char_cnn(path):
     return model, class_names, transform
 
 
-# --------------------------------------------------------------------------
 # Pipeline stages
-# --------------------------------------------------------------------------
-def pad_box(box, image_shape, pad_ratio=0.08):
-    """Expands a box by pad_ratio on each side, clipped to image bounds.
 
-    Tight YOLO boxes often clip the first/last character on a plate, which
-    then produces a wrong reading downstream — a small margin fixes that.
-    """
+def pad_box(box, image_shape, pad_ratio=0.08):
+    
+    """Expands a box by pad_ratio on each side, clipped to image bounds."""
+    
     x1, y1, x2, y2 = box
     h, w = image_shape[:2]
     bw, bh = x2 - x1, y2 - y1
@@ -126,10 +115,6 @@ def enhance_plate_crop(crop_bgr, target_min_height=180, max_scale=6.0,
                         apply_clahe=True, apply_sharpen=True):
     """
     Improves a low-quality plate crop before it goes into character segmentation.
-
-    Deliberately stays a normal color image (no grayscale/thresholding) — the
-    CNN classifier expects color input normalized like its training data, so
-    binarizing here would push inputs off-distribution and hurt accuracy.
     """
     h, w = crop_bgr.shape[:2]
     if h == 0 or w == 0:
@@ -158,11 +143,6 @@ def enhance_plate_crop(crop_bgr, target_min_height=180, max_scale=6.0,
 def order_character_boxes(xyxy):
     """
     Returns box indices in reading order: top row(s) first, left-to-right within each row.
-
-    Plain x-sorting breaks the moment a plate has more than one text line (very
-    common on Nepali plates — province name above the plate number) or is even
-    slightly rotated, since box x-ranges can then overlap across rows. This
-    clusters boxes into rows by y-position first, then sorts each row by x.
     """
     n = len(xyxy)
     if n == 0:
@@ -226,18 +206,6 @@ def classify_characters(cnn_model, class_names, transform, char_crops):
 
 
 def format_plate(chars):
-    """
-    Formats the recognized sequence as Nepali plates are actually laid out:
-    [[prefix: province char(s) + zone digit(s) + class letter]] [4-digit number].
-
-    Only the trailing 4-digit number is a fixed-length part of a Nepali plate —
-    the zone-digit count (1 or 2 digits depending on province) and the number
-    of prefix letters both vary. Assuming a fixed zone-digit count caused
-    digits to be double-counted (once as "zone", again as part of the number)
-    whenever a plate's actual zone code was shorter than assumed. So this just
-    inserts a space before the last 4 digits and leaves everything else as-is,
-    rather than re-deriving groups from scratch.
-    """
     raw = "".join(chars)
 
     if len(chars) >= 4 and all(c in DEVANAGARI_DIGITS for c in chars[-4:]):

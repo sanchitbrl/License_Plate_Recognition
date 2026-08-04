@@ -1,222 +1,122 @@
-import streamlit as st
+
+import io
+import os
+
 import cv2
 import numpy as np
-import easyocr
-from ultralytics import YOLO
+import streamlit as st
 from PIL import Image
-import time
 
-# page setup
-st.set_page_config(
-    page_title="Nepali LPR System",
-    page_icon="",
-    layout="centered",
-)
+import pipeline as pl
 
-# styling
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Sora:wght@300;400;600;700&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Sora', sans-serif;
-    }
-
-    .main {
-        background-color: #0d0f14;
-        color: #e8eaf0;
-    }
-
-    h1, h2, h3 {
-        font-family: 'Space Mono', monospace;
-    }
-
-    .plate-box {
-        background: linear-gradient(135deg, #1a1d27, #12151f);
-        border: 2px solid #3af0a2;
-        border-radius: 12px;
-        padding: 24px 32px;
-        text-align: center;
-        margin: 16px 0;
-    }
-
-    .plate-text {
-        font-family: 'Space Mono', monospace;
-        font-size: 2.4rem;
-        font-weight: 700;
-        color: #3af0a2;
-        letter-spacing: 0.15em;
-    }
-
-    .raw-ocr {
-        font-family: 'Space Mono', monospace;
-        font-size: 0.85rem;
-        color: #7a8099;
-        margin-top: 8px;
-    }
-
-    .step-label {
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        color: #7a8099;
-        margin-bottom: 4px;
-    }
-
-    .info-chip {
-        display: inline-block;
-        background: #1a1d27;
-        border: 1px solid #2a2e3f;
-        border-radius: 20px;
-        padding: 4px 14px;
-        font-size: 0.8rem;
-        color: #9aa0b8;
-        margin: 2px;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# header
-st.markdown("# Nepali LPR")
-st.markdown("**License Plate Recognition** — YOLOv8 + EasyOCR (Nepali)")
-st.markdown("---")
-
-# load models once
-@st.cache_resource
-def load_models():
-    model = YOLO("best(LP dectection).pt")
-    model.model.names[0] = "license_plate"
-    reader = easyocr.Reader(["ne"], gpu=False)
-    return model, reader
-
-with st.spinner("Loading models..."):
-    model, reader = load_models()
-
-st.success("Models loaded")
-
-# file upload
-st.markdown("### Upload Vehicle Image")
-uploaded_file = st.file_uploader(
-    "Supports JPG, JPEG, PNG",
-    type=["jpg", "jpeg", "png"],
-    label_visibility="collapsed",
-)
-
-# nepali plate characters
-ALLOWLIST    = "०१२३४५६७८९बामेकोसजनागलुधराभेकसेमपप्रखफझबघञया"
-VALID_CHARS  = "बामेकोसजनागलुधराभेकसेमपप्रखफझबघञया"
-VALID_DIGITS = "०१२३४५६७८९"
+MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
+PLATE_MODEL_PATH = os.path.join(MODELS_DIR, "plate_detector.pt")
+CHAR_SEG_MODEL_PATH = os.path.join(MODELS_DIR, "char_segmenter.pt")
+CHAR_CNN_PATH = os.path.join(MODELS_DIR, "char_cnn_checkpoint.pth")
 
 
-def preprocess_plate(crop):
-    # upscale, grayscale, blur, threshold, sharpen
-    plate = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-    gray  = cv2.cvtColor(plate, cv2.COLOR_BGR2GRAY)
-    gray  = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, thresh = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
-    kernel = np.array([[-1,-1,-1],[-1,9,-1],[-1,-1,-1]])
-    sharp  = cv2.filter2D(thresh, -1, kernel)
-    return crop, sharp
+PLATE_CONF = 0.5
+CHAR_CONF = 0.25
+PAD_RATIO = 0.08
+
+DO_ENHANCE = True
+TARGET_MIN_HEIGHT = 180
+DO_CLAHE = True
+DO_SHARPEN = True
 
 
-def format_plate(full_text):
-    # split into letters and digits then rebuild plate format
-    letters, numbers = [], []
-    for ch in full_text:
-        if ch in VALID_CHARS:    letters.append(ch)
-        elif ch in VALID_DIGITS: numbers.append(ch)
-
-    first_char = letters[0]  if len(letters) > 0 else ""
-    middle_num = "".join(numbers[:2])  if len(numbers) >= 2 else "".join(numbers)
-    last_char  = letters[-1] if len(letters) > 1 else ""
-    last_4     = "".join(numbers[-4:]) if len(numbers) >= 4 else "".join(numbers[2:])
-    return first_char + middle_num + last_char + " " + last_4
+@st.cache_resource(show_spinner="Loading plate detector...")
+def load_plate_model():
+    return pl.load_plate_model(PLATE_MODEL_PATH)
 
 
-if uploaded_file:
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+@st.cache_resource(show_spinner="Loading character segmenter...")
+def load_char_seg_model():
+    return pl.load_char_seg_model(CHAR_SEG_MODEL_PATH)
 
-    # show input
-    st.markdown("### Step 1 — Input Image")
-    st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
 
-    # run yolo
-    st.markdown("### Step 2 — Plate Detection")
-    with st.spinner("Running YOLOv8..."):
-        results = model.predict(source=img, conf=0.5, verbose=False)
-        time.sleep(0.3)
+@st.cache_resource(show_spinner="Loading character classifier...")
+def load_char_cnn():
+    return pl.load_char_cnn(CHAR_CNN_PATH)
 
-    plates_found = False
 
-    for result in results:
-        for i, box in enumerate(result.boxes):
-            plates_found = True
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf_score = float(box.conf[0])
+def main():
+    st.set_page_config(page_title="Nepali License Plate Recognition", layout="wide")
+    st.title(" Nepali License Plate Recognition")
+    st.caption("Upload an image → plate detection → character segmentation → character recognition")
 
-            # draw box on image
-            annotated = img.copy()
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (58, 240, 162), 3)
-            cv2.putText(
-                annotated,
-                f"plate  {conf_score:.0%}",
-                (x1, max(y1 - 10, 20)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                (58, 240, 162),
-                2,
-            )
-            st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_container_width=True)
-            st.caption(f"Detection confidence: **{conf_score:.1%}**")
+    missing = [p for p in [PLATE_MODEL_PATH, CHAR_SEG_MODEL_PATH, CHAR_CNN_PATH] if not os.path.exists(p)]
+    if missing:
+        st.error(
+            "Missing model file(s). Place these in the `models/` folder next to app.py:\n\n"
+            + "\n".join(f"- `{os.path.basename(p)}`" for p in missing)
+        )
+        st.stop()
 
-            # preprocess crop
-            st.markdown("### Step 3 — Preprocessing")
-            crop = img[y1:y2, x1:x2]
-            original_crop, sharp = preprocess_plate(crop)
+    uploaded_file = st.file_uploader("Upload a vehicle image", type=["jpg", "jpeg", "png"])
+    if uploaded_file is None:
+        st.info("Upload an image to run the pipeline.")
+        return
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown('<p class="step-label">Cropped Plate</p>', unsafe_allow_html=True)
-                st.image(cv2.cvtColor(original_crop, cv2.COLOR_BGR2RGB), use_container_width=True)
-            with col2:
-                st.markdown('<p class="step-label">Processed</p>', unsafe_allow_html=True)
-                st.image(sharp, use_container_width=True)
+    image_pil = Image.open(io.BytesIO(uploaded_file.read())).convert("RGB")
+    image_bgr = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
 
-            # run ocr
-            st.markdown("### Step 4 — OCR")
-            cv2.imwrite("_plate_temp.jpg", sharp)
-            with st.spinner("Reading text..."):
-                ocr_result = reader.readtext(
-                    "_plate_temp.jpg",
-                    detail=0,
-                    paragraph=False,
-                    allowlist=ALLOWLIST,
-                )
-            full_text = "".join(ocr_result)
-            formatted = format_plate(full_text)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Input image")
+        st.image(image_pil, use_container_width=True)
 
-            # final output
-            st.markdown("### Result")
-            st.markdown(
-                f"""
-                <div class="plate-box">
-                    <div class="plate-text">{formatted if formatted.strip() else "could not read"}</div>
-                    <div class="raw-ocr">raw ocr: {full_text if full_text else "nothing detected"}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    plate_model = load_plate_model()
+    char_seg_model = load_char_seg_model()
+    cnn_model, class_names, cnn_transform = load_char_cnn()
 
-    if not plates_found:
-        st.warning("No license plate detected. Try a clearer image.")
+    with st.spinner("Detecting plate..."):
+        plate_crop, box = pl.detect_plate(plate_model, image_bgr, PLATE_CONF, pad_ratio=PAD_RATIO)
 
-# footer
-st.markdown("---")
-st.markdown(
-    '<span class="info-chip">YOLOv8s</span>'
-    '<span class="info-chip">EasyOCR Nepali</span>'
-    '<span class="info-chip">OpenCV</span>',
-    unsafe_allow_html=True,
-)
+    if plate_crop is None:
+        st.warning("No license plate detected.")
+        return
+
+    if DO_ENHANCE:
+        enhanced_crop = pl.enhance_plate_crop(
+            plate_crop,
+            target_min_height=TARGET_MIN_HEIGHT,
+            apply_clahe=DO_CLAHE,
+            apply_sharpen=DO_SHARPEN,
+        )
+    else:
+        enhanced_crop = plate_crop
+
+    with col2:
+        st.subheader("Detected plate")
+        sub1, sub2 = st.columns(2)
+        sub1.image(cv2.cvtColor(plate_crop, cv2.COLOR_BGR2RGB), caption="Raw crop", use_container_width=True)
+        sub2.image(cv2.cvtColor(enhanced_crop, cv2.COLOR_BGR2RGB), caption="Enhanced", use_container_width=True)
+
+    with st.spinner("Segmenting characters..."):
+        char_crops = pl.segment_characters(char_seg_model, enhanced_crop, CHAR_CONF)
+
+    if not char_crops:
+        st.warning("No characters detected on the plate.")
+        return
+
+    st.subheader(f"Segmented characters ({len(char_crops)}) — reading order left→right, top row first")
+    char_cols = st.columns(len(char_crops))
+
+    with st.spinner("Reading characters..."):
+        predicted_chars = pl.classify_characters(cnn_model, class_names, cnn_transform, char_crops)
+
+    for i, (c, crop, pred) in enumerate(zip(char_cols, char_crops, predicted_chars)):
+        c.image(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), caption=f"#{i+1}: {pred}", use_container_width=True)
+
+    formatted, raw = pl.format_plate(predicted_chars)
+
+    st.divider()
+    st.subheader("Result")
+    st.metric("Detected plate", formatted)
+    if formatted != raw:
+        st.caption(f"Raw character sequence: {raw}")
+
+
+if __name__ == "__main__":
+    main()
