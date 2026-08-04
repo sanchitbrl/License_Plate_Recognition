@@ -109,4 +109,4 @@ Only the trailing 4-digit number is a fixed-length, reliably identifiable compon
 
 
 ## Demo Video
-[![Watch the video](https://www.youtube.com/watch?v=ILccmyscx8c)](https://youtu.be)
+[![Watch the video](https://www.youtube.com/watch?v=ILccmyscx8c)](https://www.youtube.com/watch?v=ILccmyscx8c)
