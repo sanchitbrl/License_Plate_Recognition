@@ -106,3 +106,7 @@ Only the trailing 4-digit number is a fixed-length, reliably identifiable compon
 - Both apps currently process only the single highest-confidence plate detection per image; multi-vehicle images with multiple plates are not fully handled.
 - The Colab notebooks (`LPR.py`, `character_detection_model.py`) are retained for reference and reproducibility and are not intended to run outside the Colab environment as-is, since they depend on `google.colab` upload/display utilities.
 - `app.py` writes an intermediate file (`_plate_temp.jpg`) to disk during OCR; this is a side effect of EasyOCR's file-based `readtext` API and is excluded via `.gitignore`.
+
+
+## Demo Video
+[![Watch the video](https://www.youtube.com/watch?v=ILccmyscx8c)](https://youtu.be)
